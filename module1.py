@@ -36,7 +36,8 @@ def get_latest_unprocessed_file(service, tracker_collection):
     for file in files:
         file_id = file["id"]
         file_name = file["name"]
-        if tracker_collection.find_one({"drive_id": file_id}):
+        if tracker_collection.find_one({"id": file_id}):
+
             continue
         return file_id, file_name
 
@@ -51,9 +52,9 @@ def download_and_sync():
     service = build("drive", "v3", credentials=creds)
 
     client = MongoClient(MONGO_URI)
-    db = client["my_database"]
+    db = client["stock_database"]
     tracker = db["processed_files"]
-    collection = db["latest_data"]
+    collection = db["volatility_data"]
 
     file_id, file_name = get_latest_unprocessed_file(service, tracker)
 
@@ -69,16 +70,38 @@ def download_and_sync():
 
         fh.seek(0)
         df = pd.read_csv(fh)
-        df.columns = df.columns.str.strip()
 
+        df.columns = df.columns.str.strip()
+        df["Previous Day Underlying Volatility (D)"] = pd.to_numeric(
+            df["Previous Day Underlying Volatility (D)"], errors="coerce"
+        )
+        df[
+            "Current Day Underlying Daily Volatility (E) = Sqrt(0.995*D*D + 0.005*C*C)"
+        ] = pd.to_numeric(
+            df[
+                "Current Day Underlying Daily Volatility (E) = Sqrt(0.995*D*D + 0.005*C*C)"
+            ],
+            errors="coerce",
+        )
+        df["Underlying Annualised Volatility (F) = E*Sqrt(365)"] = pd.to_numeric(
+            df["Underlying Annualised Volatility (F) = E*Sqrt(365)"], errors="coerce"
+        )
+        cols_to_drop = [
+            "Underlying Close Price (A)",
+            "Underlying Previous Day Close Price (B)",
+            "Underlying Log Returns (C) = LN(A/B)",
+        ]
+
+        df = df.drop(columns=cols_to_drop, errors="ignore")
+
+        # To be added drop change to float
         data_dict = df.to_dict("records")
         if data_dict:
             collection.insert_many(data_dict)
             tracker.insert_one(
                 {
-                    "drive_id": file_id,
-                    "file_name": file_name,
-                    "sync_date": pd.Timestamp.now(),
+                    "id": file_id,
+                    "name": file_name,
                 }
             )
             st.success(f"Successfully synced {len(data_dict)} rows from {file_name}.")
@@ -86,7 +109,3 @@ def download_and_sync():
         st.write("Everything is up to date!")
 
     client.close()
-
-
-if __name__ == "__main__":
-    download_and_sync()

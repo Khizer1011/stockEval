@@ -12,18 +12,14 @@ st.title("📈 Stock Market Analytics Dashboard")
 
 
 # --- Database Connection ---
-@st.cache_resource
-def init_connection():
-    # Replace with your actual MONGO_URI
-    return MongoClient(st.secrets["mongo"]["uri"])
 
 
-client = init_connection()
+client = MongoClient("mongodb://localhost:27017/")
 
 
 def get_data():
-    db = client["my_database"]
-    collection = db["latest_data"]
+    db = client["stock_database"]
+    collection = db["volatility_data"]
     data = list(collection.find())
     df = pd.DataFrame(data)
 
@@ -32,13 +28,10 @@ def get_data():
             df = df.drop(columns=["_id"])
 
         # 1. Convert Date
-        df["Date"] = pd.to_datetime(df["Date"])
+        df["date"] = pd.to_datetime(df["date"])
 
         # 2. Force Numeric Conversion (Crucial for plotting)
         numeric_cols = [
-            "Underlying Close Price (A)",
-            "Underlying Previous Day Close Price (B)",
-            "Underlying Log Returns (C) = LN(A/B)",
             "Previous Day Underlying Volatility (D)",
             "Current Day Underlying Daily Volatility (E) = Sqrt(0.995*D*D + 0.005*C*C)",
             "Underlying Annualised Volatility (F) = E*Sqrt(365)",
@@ -56,34 +49,30 @@ df = get_data()
 if not df.empty:
     # --- 1. Metrics Mapping ---
     metrics_map = {
-        "Underlying Close Price (A)": 50,
-        "Underlying Previous Day Close Price (B)": 50,
-        "Underlying Log Returns (C) = LN(A/B)": 0.02,
         "Previous Day Underlying Volatility (D)": 0.01,
-        "Current Day Underlying Daily Volatility (E) = Sqrt(0.995*D*D + 0.005*C*C)": 0.01,
+        "Current Day Underlying Daily Volatility (E) = Sqrt(0.995*D*D + 0.005*C*C)": 0.00000001,
         "Underlying Annualised Volatility (F) = E*Sqrt(365)": 0.10,
     }
 
     # --- 2. Sidebar UI ---
     st.sidebar.header("📊 Dashboard Controls")
-    selected_symbol = st.sidebar.selectbox(
-        "Select Symbol", options=sorted(df["Symbol"].unique())
-    )
+    sorted_symbols = sorted(df["symbol"].astype(str).unique())
+    selected_symbol = st.sidebar.selectbox("Select Symbol", options=sorted_symbols)
     selected_metric = st.sidebar.selectbox(
         "Select Metric", options=list(metrics_map.keys())
     )
 
-    min_date, max_date = df["Date"].min().date(), df["Date"].max().date()
+    min_date, max_date = df["date"].min().date(), df["date"].max().date()
     date_range = st.sidebar.date_input("Date Range", value=(min_date, max_date))
 
     # --- 3. Data Processing ---
-    mask = df["Symbol"] == selected_symbol
+    mask = df["symbol"] == selected_symbol
     if isinstance(date_range, tuple) and len(date_range) == 2:
-        mask &= (df["Date"].dt.date >= date_range[0]) & (
-            df["Date"].dt.date <= date_range[1]
+        mask &= (df["date"].dt.date >= date_range[0]) & (
+            df["date"].dt.date <= date_range[1]
         )
 
-    filtered_df = df[mask].sort_values("Date").copy()
+    filtered_df = df[mask].sort_values("date").copy()
 
     # --- 4. Main UI Layout ---
     if not filtered_df.empty:
@@ -97,11 +86,11 @@ if not df.empty:
         delta = float(curr_val) - float(prev_val)
 
         m1, m2, m3 = st.columns(3)
-        m1.metric(label=selected_metric, value=f"{curr_val:.2f}", delta=f"{delta:.4f}")
+        m1.metric(label=selected_metric, value=f"{curr_val:.4f}", delta=f"{delta:.4f}")
         m2.metric(
-            label="Period High", value=f"{filtered_df[selected_metric].max():.2f}"
+            label="Period High", value=f"{filtered_df[selected_metric].max():.4f}"
         )
-        m3.metric(label="Period Low", value=f"{filtered_df[selected_metric].min():.2f}")
+        m3.metric(label="Period Low", value=f"{filtered_df[selected_metric].min():.4f}")
 
         # --- 5. Altair Chart with Selection Fix ---
         interval = metrics_map[selected_metric]
@@ -113,7 +102,7 @@ if not df.empty:
         # Dynamic Ticks calculation
         actual_range = y_max - y_min
         if interval == 0 or (actual_range / interval > 15):
-            interval = actual_range / 8 if actual_range > 0 else 1
+            interval = actual_range / 4 if actual_range > 0 else 1
 
         tick_values = np.arange(
             (y_min // interval) * interval, (y_max // interval + 2) * interval, interval
@@ -130,7 +119,7 @@ if not df.empty:
             .mark_line(interpolate="monotone", color="#00d4ff", strokeWidth=3)
             .encode(
                 x=alt.X(
-                    "Date:T",
+                    "date:T",
                     title="Timeline",
                     axis=alt.Axis(format="%b %d", labelAngle=-45, grid=False),
                 ),
